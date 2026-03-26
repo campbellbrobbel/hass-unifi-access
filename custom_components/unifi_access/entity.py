@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -26,12 +28,17 @@ class UnifiAccessDoorDeviceMixin:
         )
 
 
-class UnifiAccessDoorEntity(UnifiAccessDoorDeviceMixin, CoordinatorEntity[UnifiAccessCoordinator[dict[str, DoorState]]]):
+class UnifiAccessDoorEntity(
+    UnifiAccessDoorDeviceMixin,
+    CoordinatorEntity[UnifiAccessCoordinator[dict[str, DoorState]]],
+):
     """Base entity for a Unifi Access door bound to a coordinator."""
 
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: UnifiAccessCoordinator[dict[str, DoorState]], door: DoorState) -> None:
+    def __init__(
+        self, coordinator: UnifiAccessCoordinator[dict[str, DoorState]], door: DoorState
+    ) -> None:
         """Initialize the base door entity."""
         super().__init__(coordinator, context=door.id)
         self.door = door

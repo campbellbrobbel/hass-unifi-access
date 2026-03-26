@@ -42,7 +42,9 @@ class UnifiDoorStatusEntity(UnifiAccessDoorEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.DOOR
     _attr_translation_key = "access_door_dps"
 
-    def __init__(self, coordinator: UnifiAccessCoordinator[dict[str, DoorState]], door_id: str) -> None:
+    def __init__(
+        self, coordinator: UnifiAccessCoordinator[dict[str, DoorState]], door_id: str
+    ) -> None:
         """Initialize DPS Entity."""
         super().__init__(coordinator, coordinator.data[door_id])
         self._attr_unique_id = self.door.id
@@ -59,7 +61,9 @@ class UnifiDoorbellStatusEntity(UnifiAccessDoorEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
     _attr_translation_key = "doorbell_status"
 
-    def __init__(self, coordinator: UnifiAccessCoordinator[dict[str, DoorState]], door_id: str) -> None:
+    def __init__(
+        self, coordinator: UnifiAccessCoordinator[dict[str, DoorState]], door_id: str
+    ) -> None:
         """Initialize Doorbell Entity."""
         super().__init__(coordinator, coordinator.data[door_id])
         self._attr_unique_id = f"doorbell_{self.door.id}"

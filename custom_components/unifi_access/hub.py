@@ -7,15 +7,24 @@ for the Home Assistant integration.
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
+import unicodedata
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-import logging
-import time
+from enum import Enum
 from typing import Any
-import unicodedata
 
-from unifi_access_api import (
+from .const import (
+    ACCESS_ENTRY_EVENT,
+    ACCESS_EXIT_EVENT,
+    ACCESS_GENERIC_EVENT,
+    DOORBELL_START_EVENT,
+    DOORBELL_STOP_EVENT,
+)
+from .unifi_access_api import (
+    ApiAuthError,
     ApiError,
     ApiNotFoundError,
     BaseInfo,
@@ -40,15 +49,7 @@ from unifi_access_api import (
     V2LocationUpdate,
     WsMessageHandler,
 )
-from unifi_access_api.models.websocket import WebsocketMessage
-
-from .const import (
-    ACCESS_ENTRY_EVENT,
-    ACCESS_EXIT_EVENT,
-    ACCESS_GENERIC_EVENT,
-    DOORBELL_START_EVENT,
-    DOORBELL_STOP_EVENT,
-)
+from .unifi_access_api.models.websocket import WebsocketMessage
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,11 +64,20 @@ def _normalize_name(name: str) -> str:
 EventListener = Callable[[str, dict[str, str]], None]
 
 
+class DoorEntityType(str, Enum):
+    """Door entity type options."""
+
+    LOCK = "lock"
+    GARAGE = "garage"
+    GATE = "gate"
+
+
 @dataclass
 class DoorState:
     """Mutable runtime state for a single door."""
 
     door: Door
+    entity_type: DoorEntityType | None = None
     hub_id: str | None = None
     hub_type: str | None = None
     lock_rule: str = ""
@@ -76,7 +86,6 @@ class DoorState:
     doorbell_request_id: str | None = None
     thumbnail: bytes | None = None
     thumbnail_last_updated: datetime | None = None
-
     _event_listeners: dict[str, list[EventListener]] = field(
         default_factory=dict, repr=False
     )
@@ -110,6 +119,16 @@ class DoorState:
     def is_open(self) -> bool:
         """Return whether the door is open."""
         return bool(self.door.door_position_status == DoorPositionStatus.OPEN)
+
+    @property
+    def is_unlocking(self) -> bool:
+        """Return whether the door is unlocked."""
+        return bool(self.door.door_lock_relay_status == DoorLockRelayStatus.UNLOCK)
+
+    @property
+    def is_locking(self) -> bool:
+        """Return whether the door is currently locking."""
+        return bool(self.door.door_lock_relay_status == DoorLockRelayStatus.LOCK)
 
     @property
     def doorbell_pressed(self) -> bool:
@@ -173,13 +192,42 @@ class UnifiAccessHub:
     # ------------------------------------------------------------------
 
     async def async_update(self) -> dict[str, DoorState]:
+        """Fetch devices."""
+        api_devices = await self.client.get_devices()
+
+        hub_types = {}
+        for device in api_devices:
+            capabilities = device.capabilities
+            if "is_hub" in capabilities or "identity_is_hub" in capabilities:
+                hub_types[device.id] = device.type
+
+            # Map doors to their controlling hub
+        for device in api_devices:
+            location_id = device.location_id
+            if not location_id or location_id not in self.doors:
+                continue
+
+            capabilities = device.capabilities, []
+            # If device is itself a hub at this location, use it directly
+            if "is_hub" in capabilities or "identity_is_hub" in capabilities:
+                self.doors[location_id].hub_type = device.type
+                self.doors[location_id].hub_id = device.id
+            # Otherwise, use the type of the hub this device is connected to
+            elif device.connected_uah_id in hub_types:
+                connected_hub_id = device.connected_uah_id
+                self.doors[location_id].hub_type = hub_types[connected_hub_id]
+                self.doors[location_id].hub_id = connected_hub_id
+
         """Fetch all doors and return the door state dict (for coordinator)."""
         api_doors = await self.client.get_doors()
+
         for api_door in api_doors:
             if api_door.id in self.doors:
                 self.doors[api_door.id].door = api_door
             else:
-                self.doors[api_door.id] = DoorState(door=api_door)
+                self.doors[api_door.id] = DoorState(
+                    door=api_door, entity_type=DoorEntityType.LOCK
+                )
         # Fetch lock rules for each door
         for door_id, state in self.doors.items():
             try:
@@ -187,9 +235,7 @@ class UnifiAccessHub:
                 state.lock_rule = rule_status.type.value
                 state.lock_rule_ended_time = rule_status.ended_time
             except ApiNotFoundError:
-                _LOGGER.debug(
-                    "Door lock rules not supported for door %s", door_id
-                )
+                _LOGGER.debug("Door lock rules not supported for door %s", door_id)
                 self.supports_door_lock_rules = False
                 break
         return self.doors
@@ -224,6 +270,9 @@ class UnifiAccessHub:
         interval = state.lock_rule_interval if state else 0
 
         try:
+            _LOGGER.info(
+                f"Setting lock rule for door {door_id} to {rule_type} with interval {interval}"
+            )
             door_lock_rule_type = DoorLockRuleType(rule_type)
         except ValueError:
             _LOGGER.warning(
@@ -239,6 +288,69 @@ class UnifiAccessHub:
         if state is not None:
             state.lock_rule = rule_type
             self._notify_doors_updated()
+
+    async def async_set_door_entity_type(self, door_id: str, entity_type: str) -> None:
+        """Set the entity type for a door (lock/garage/gate)."""
+        state = self.doors.get(door_id)
+        if state is None:
+            _LOGGER.warning("Cannot set entity type for unknown door %s", door_id)
+            return
+        state.entity_type = DoorEntityType(entity_type)
+        self._notify_doors_updated()
+
+    async def _reload_cover_platform(self) -> None:
+        """Reload just the cover platform to update device class."""
+        config_entries = self.hass.config_entries.async_entries(DOMAIN)
+        if config_entries:
+            entry = config_entries[0]
+            await self.hass.config_entries.async_unload_platforms(
+                entry, [Platform.COVER]
+            )
+            await self.hass.config_entries.async_forward_entry_setups(
+                entry, [Platform.COVER]
+            )
+
+    async def _swap_entities(
+        self, old_is_cover: bool, new_is_cover: bool, new_type: DoorEntityType
+    ) -> None:
+        """Remove old entity and add new entity dynamically."""
+        from homeassistant.helpers import entity_registry as er
+
+        # Determine what to remove
+        remove_platform = "cover" if old_is_cover else "lock"
+        remove_unique_id = f"{self.door.id}_cover" if old_is_cover else self.door.id
+
+        _LOGGER.debug(
+            "Swapping door %s from %s to %s",
+            self.door.name,
+            remove_platform,
+            "cover" if new_is_cover else "lock",
+        )
+
+        # Remove the old entity from registry
+        registry = er.async_get(self.hass)
+        entity_id = registry.async_get_entity_id(
+            remove_platform, DOMAIN, remove_unique_id
+        )
+
+        if entity_id:
+            _LOGGER.debug("Removing old %s entity: %s", remove_platform, entity_id)
+            registry.async_remove(entity_id)
+
+        # NOW update the door entity_type so platforms will filter correctly
+        self.door.entity_type = new_type
+
+        # Reload the platforms to recreate entities with correct filtering
+        config_entries = self.hass.config_entries.async_entries(DOMAIN)
+        if config_entries:
+            entry = config_entries[0]
+            # Reload both lock and cover platforms
+            await self.hass.config_entries.async_unload_platforms(
+                entry, [Platform.LOCK, Platform.COVER]
+            )
+            await self.hass.config_entries.async_forward_entry_setups(
+                entry, [Platform.LOCK, Platform.COVER]
+            )
 
     # ------------------------------------------------------------------
     # WebSocket
@@ -274,6 +386,43 @@ class UnifiAccessHub:
     async def async_close(self) -> None:
         """Close the API client (stops websocket)."""
         await self.client.close()
+
+    async def _fetch_and_map_devices_to_doors(self):
+        """Fetch devices from API and map hub types to doors."""
+        try:
+            devices_response = await self.client.get_devices()
+
+            # API returns nested arrays grouped by hub, flatten them
+            devices = []
+
+            # Build a map of hub IDs to their types
+            hub_types = {}
+            for device in devices_response:
+                capabilities = device.capabilities
+
+                if "is_hub" in capabilities or "identity_is_hub" in capabilities:
+                    hub_types[device.id] = device.type
+
+            # Map doors to their controlling hub
+            for device in devices:
+                location_id = device.location_id
+                if not location_id or location_id not in self.doors:
+                    continue
+
+                capabilities = device.capabilities
+                # If device is itself a hub at this location, use it directly
+                if "is_hub" in capabilities or "identity_is_hub" in capabilities:
+                    self.doors[location_id].hub_type = device.type
+                    self.doors[location_id].hub_id = device.id
+                # Otherwise, use the type of the hub this device is connected to
+                elif device.connected_uah_id in hub_types:
+                    connected_hub_id = device.connected_uah_id
+                    self.doors[location_id].hub_type = hub_types[connected_hub_id]
+                    self.doors[location_id].hub_id = connected_hub_id
+
+            _LOGGER.debug("Device mapping complete")
+        except (ApiError, ApiAuthError) as e:
+            _LOGGER.warning("Could not fetch devices for hub type mapping: %s", e)
 
     # ------------------------------------------------------------------
     # WebSocket helpers
@@ -421,9 +570,7 @@ class UnifiAccessHub:
         update: LogAdd = msg  # type: ignore[assignment]
         source = update.data.source
 
-        door_target = next(
-            (t for t in source.target if t.type == "door"), None
-        )
+        door_target = next((t for t in source.target if t.type == "door"), None)
         if door_target is None:
             return
 
@@ -631,9 +778,7 @@ class UnifiAccessHub:
         if updated:
             self._notify_doors_updated()
 
-    async def _handle_location_update_legacy(
-        self, msg: WebsocketMessage
-    ) -> None:
+    async def _handle_location_update_legacy(self, msg: WebsocketMessage) -> None:
         """Handle legacy (V1) location update messages."""
         update: LocationUpdateLegacy = msg  # type: ignore[assignment]
         door_id = update.data.unique_id
@@ -649,18 +794,14 @@ class UnifiAccessHub:
             thumb_ts = extras.get("door_thumbnail_last_update")
             if thumb_url and isinstance(thumb_url, str):
                 try:
-                    state.thumbnail = await self.client.get_thumbnail(
-                        thumb_url
-                    )
+                    state.thumbnail = await self.client.get_thumbnail(thumb_url)
                     if thumb_ts is not None:
                         state.thumbnail_last_updated = datetime.fromtimestamp(
                             int(thumb_ts), tz=UTC
                         )
                     updated = True
                 except (ApiError, TimeoutError, ValueError):
-                    _LOGGER.debug(
-                        "Failed to fetch thumbnail for door %s", door_id
-                    )
+                    _LOGGER.debug("Failed to fetch thumbnail for door %s", door_id)
 
         _LOGGER.debug(
             "Legacy location update door %s (%s)",

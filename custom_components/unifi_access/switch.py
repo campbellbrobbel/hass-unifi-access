@@ -7,12 +7,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from unifi_access_api import EmergencyStatus
 
 from . import UnifiAccessConfigEntry
 from .const import DOMAIN
 from .coordinator import UnifiAccessCoordinator
 from .hub import UnifiAccessHub
+from .unifi_access_api import EmergencyStatus
 
 PARALLEL_UPDATES = 1
 

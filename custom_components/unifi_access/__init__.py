@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
+import logging
 import ssl
 from dataclasses import dataclass
 
+import homeassistant.helpers.entity_registry as er
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 from homeassistant.util import ssl as ssl_util
-from unifi_access_api import ApiConnectionError, EmergencyStatus, UnifiAccessApiClient
 
-from .const import DOMAIN
+from .const import DOMAIN, STORAGE_KEY, STORAGE_VERSION
 from .coordinator import UnifiAccessCoordinator
-from .hub import DoorState, UnifiAccessHub
+from .hub import DoorEntityType, DoorState, UnifiAccessHub
+from .unifi_access_api import ApiConnectionError, EmergencyStatus, UnifiAccessApiClient
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -27,6 +30,7 @@ PLATFORMS: list[Platform] = [
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.COVER,
 ]
 
 
@@ -41,10 +45,25 @@ class UnifiAccessData:
 
 type UnifiAccessConfigEntry = ConfigEntry[UnifiAccessData]
 
+_LOGGER = logging.getLogger(__name__)
 
-async def async_setup_entry(
-    hass: HomeAssistant, entry: UnifiAccessConfigEntry
-) -> bool:
+
+async def remove_stale_entities(hass: HomeAssistant, entry_id: str):
+    """Remove entities that are stale."""
+    _LOGGER.debug("Removing stale entities")
+    registry = er.async_get(hass)
+    config_entry_entities = registry.entities.get_entries_for_config_entry_id(entry_id)
+    stale_entities = [
+        entity
+        for entity in config_entry_entities
+        if (entity.disabled or not hass.states.get(entity.entity_id))
+    ]
+    for entity in stale_entities:
+        _LOGGER.debug("Removing stale entity: %s", entity.entity_id)
+        registry.async_remove(entity.entity_id)
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: UnifiAccessConfigEntry) -> bool:
     """Set up Unifi Access from a config entry."""
     session = async_get_clientsession(hass, verify_ssl=entry.data["verify_ssl"])
 
@@ -70,6 +89,7 @@ async def async_setup_entry(
     except ApiConnectionError as err:
         raise ConfigEntryNotReady("Unable to connect to UniFi Access") from err
 
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = hub
     coordinator: UnifiAccessCoordinator[dict[str, DoorState]] = UnifiAccessCoordinator(
         hass,
         entry,
@@ -79,6 +99,35 @@ async def async_setup_entry(
         always_update=True,
     )
     await coordinator.async_config_entry_first_refresh()
+
+    # Set up storage for entity types
+    store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+    stored_data = await store.async_load() or {}
+    hass.data[DOMAIN]["store"] = store
+    hass.data[DOMAIN]["entity_types"] = stored_data.get("entity_types", {})
+
+    for door_id, door in coordinator.data.items():
+        _LOGGER.debug(
+            "Door %s: Current entity type %s with id %s",
+            door.name,
+            door.entity_type,
+            door.id,
+        )
+    # Restore entity types from storage
+    for door_id, door in coordinator.data.items():
+        if door_id in hass.data[DOMAIN]["entity_types"]:
+            stored_type = hass.data[DOMAIN]["entity_types"][door_id]
+            door.entity_type = DoorEntityType(stored_type)
+            _LOGGER.debug("Door %s: Restored entity type %s", door.name, stored_type)
+
+    for door_id, door in coordinator.data.items():
+        _LOGGER.debug(
+            "Door %s: Current entity type %s with id %s",
+            door.name,
+            door.entity_type,
+            door.id,
+        )
+    hass.data[DOMAIN]["coordinator"] = coordinator
 
     emergency_coordinator: UnifiAccessCoordinator[EmergencyStatus] = (
         UnifiAccessCoordinator(
@@ -112,6 +161,7 @@ async def async_setup_entry(
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    await remove_stale_entities(hass, entry.entry_id)
     return True
 
 

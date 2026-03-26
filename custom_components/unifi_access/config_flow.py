@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import logging
+from collections.abc import Mapping
 from typing import Any
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import ssl as ssl_util
-from unifi_access_api import (
+
+from .const import DOMAIN
+from .unifi_access_api import (
     ApiAuthError,
     ApiConnectionError,
     ApiSSLError,
     UnifiAccessApiClient,
 )
-import voluptuous as vol
-
-from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -116,15 +116,11 @@ class UnifiAccessConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
             else:
-                return self.async_update_reload_and_abort(
-                    reauth_entry, data=data
-                )
+                return self.async_update_reload_and_abort(reauth_entry, data=data)
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema(
-                {vol.Required("api_token"): str}
-            ),
+            data_schema=vol.Schema({vol.Required("api_token"): str}),
             errors=errors,
         )
 
@@ -149,17 +145,13 @@ class UnifiAccessConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
             else:
-                return self.async_update_reload_and_abort(
-                    reconfigure_entry, data=data
-                )
+                return self.async_update_reload_and_abort(reconfigure_entry, data=data)
 
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
-                        "host", default=reconfigure_entry.data["host"]
-                    ): str,
+                    vol.Required("host", default=reconfigure_entry.data["host"]): str,
                     vol.Required(
                         "api_token", default=reconfigure_entry.data["api_token"]
                     ): str,

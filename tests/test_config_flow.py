@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock, patch
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from unifi_access_api import ApiAuthError, ApiConnectionError, ApiSSLError
 
 from custom_components.unifi_access.const import DOMAIN
 
 from .conftest import MOCK_CONFIG
+from .unifi_access_api import ApiAuthError, ApiConnectionError, ApiSSLError
 
 
 async def test_user_flow_success(hass: HomeAssistant, mock_setup_entry) -> None:
@@ -261,9 +261,7 @@ async def test_reconfigure_flow_cannot_connect(
         "custom_components.unifi_access.config_flow.UnifiAccessApiClient"
     ) as mock_client_cls:
         mock_client = AsyncMock()
-        mock_client.authenticate = AsyncMock(
-            side_effect=ApiConnectionError("fail")
-        )
+        mock_client.authenticate = AsyncMock(side_effect=ApiConnectionError("fail"))
         mock_client_cls.return_value = mock_client
 
         result = await hass.config_entries.flow.async_configure(

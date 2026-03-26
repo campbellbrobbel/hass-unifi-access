@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.components.lock import LockEntity, LockEntityFeature
@@ -10,7 +11,9 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import UnifiAccessConfigEntry, UnifiAccessData
 from .entity import UnifiAccessDoorEntity
+from .hub import DoorEntityType
 
+_LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 1
 
 
@@ -21,8 +24,22 @@ async def async_setup_entry(
 ) -> None:
     """Add lock entity for passed config entry."""
     data = config_entry.runtime_data
+
+    coordinator = config_entry.runtime_data.coordinator
+
+    for key in coordinator.data:
+        _LOGGER.debug(
+            "Adding lock entity for door (%s): %s (type: %s)",
+            key,
+            coordinator.data[key].name,
+            coordinator.data[key].entity_type,
+        )
+    # Only create cover entities for doors configured as garage or gate
     async_add_entities(
-        UnifiDoorLockEntity(data, key) for key in data.coordinator.data
+        UnifiDoorLockEntity(data, key)
+        for key in coordinator.data
+        if coordinator.data[key].entity_type
+        not in (DoorEntityType.GARAGE, DoorEntityType.GATE)
     )
 
 
@@ -36,6 +53,7 @@ class UnifiDoorLockEntity(UnifiAccessDoorEntity, LockEntity):
         """Initialize Unifi Access Door Lock."""
         super().__init__(data.coordinator, data.coordinator.data[door_id])
         self._data = data
+        _LOGGER.debug("Initializing lock entity for door: %s", self.door.id)
         self._attr_unique_id = self.door.id
 
     async def async_unlock(self, **kwargs: Any) -> None:

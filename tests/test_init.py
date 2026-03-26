@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from unifi_access_api import ApiAuthError, ApiConnectionError, ApiError
 
 from custom_components.unifi_access import UnifiAccessData
 from custom_components.unifi_access.const import DOMAIN
@@ -19,6 +18,7 @@ from .conftest import (
     SAMPLE_EMERGENCY_STATUS,
     SAMPLE_LOCK_RULE_STATUS,
 )
+from .unifi_access_api import ApiAuthError, ApiConnectionError, ApiError
 
 
 @pytest.fixture
@@ -105,9 +105,7 @@ async def test_setup_entry_polling(
     mock_client.start_websocket.assert_not_called()
 
 
-async def test_unload_entry(
-    hass: HomeAssistant, mock_entry: MockConfigEntry
-) -> None:
+async def test_unload_entry(hass: HomeAssistant, mock_entry: MockConfigEntry) -> None:
     """Test unloading a config entry."""
     mock_client = _make_mock_client()
 
@@ -161,9 +159,7 @@ async def test_coordinator_auth_error(
 ) -> None:
     """Test that an auth error during coordinator refresh triggers reauth."""
     mock_client = _make_mock_client()
-    mock_client.get_doors = AsyncMock(
-        side_effect=ApiAuthError("Invalid token")
-    )
+    mock_client.get_doors = AsyncMock(side_effect=ApiAuthError("Invalid token"))
 
     with (
         patch(

@@ -9,3 +9,6 @@ DOORBELL_STOP_EVENT = "unifi_access_doorbell_stop"
 ACCESS_ENTRY_EVENT = "unifi_access_entry"
 ACCESS_EXIT_EVENT = "unifi_access_exit"
 ACCESS_GENERIC_EVENT = "unifi_access_access"
+
+STORAGE_KEY = "unifi_access_entity_types"
+STORAGE_VERSION = 1
