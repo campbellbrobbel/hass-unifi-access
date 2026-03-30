@@ -98,7 +98,8 @@ class UnifiAccessWebsocket:
         if message.startswith("Hello"):
             return
 
-        _LOGGER.debug("Websocket message received: %s", message)
+        if message != "Hello":
+            _LOGGER.debug("Websocket message received: %s", message)
         try:
             raw = json.loads(message)
         except json.JSONDecodeError:

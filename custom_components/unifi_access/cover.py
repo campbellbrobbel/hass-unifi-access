@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from functools import cached_property
 
@@ -60,6 +61,8 @@ class UnifiGarageDoorCoverEntity(UnifiAccessDoorEntity, CoverEntity):
     _attr_translation_key = "access_cover"
     _attr_has_entity_name = True
     _attr_name = None
+    _attr_is_opening = False
+    _attr_is_closing = False
 
     @property
     def device_class(self) -> CoverDeviceClass:
@@ -98,12 +101,23 @@ class UnifiGarageDoorCoverEntity(UnifiAccessDoorEntity, CoverEntity):
 
     async def async_open_cover(self, **kwargs) -> None:
         """Open the cover (trigger the door motor)."""
+        # if self.is_closed:
+        #     self._attr_is_opening = True
+        #     self._attr_is_closing = False
+        self._attr_is_opening = True
+        self._attr_is_closing = False
+        self.async_write_ha_state()
+
         await self._data.hub.client.unlock_door(self.door.id)
+        asyncio.create_task(self._finish_opening())
 
     async def async_close_cover(self, **kwargs) -> None:
         """Close the cover (trigger the door motor)."""
         # Garage doors use the same unlock signal for both open and close
         # It's a momentary trigger that activates the motor
+        self._attr_is_opening = False
+        self._attr_is_closing = True
+        self.async_write_ha_state()
         await self._data.hub.client.unlock_door(self.door.id)
 
     @property
@@ -115,16 +129,30 @@ class UnifiGarageDoorCoverEntity(UnifiAccessDoorEntity, CoverEntity):
     @property
     def is_opening(self) -> bool | None:
         """Return if the cover is opening."""
-        return self.door.is_unlocking
+        return self._attr_is_opening
 
     @property
     def is_closing(self) -> bool | None:
         """Return if the cover is closing."""
-        return self.door.is_locking
+        return self._attr_is_closing and not self._attr_is_closed
 
     def _handle_coordinator_update(self) -> None:
         """Handle Unifi Access Garage Door Cover updates from coordinator."""
-        self._attr_is_closed = not self.door.is_open and self.door.is_locked
-        self._attr_is_opening = self.door.is_unlocking
-        self._attr_is_closing = self.door.is_locking
+        _LOGGER.info(
+            "Updating cover entity state for door %s: is_open=%s, is_locked=%s, is_unlocking=%s, is_locking=%s",
+            self.door.name,
+            self.door.is_open,
+            self.door.is_locked,
+            self.door.is_unlocking,
+            self.door.is_locking,
+        )
+        self._attr_is_closed = not self.door.is_open
+        self.async_write_ha_state()
+
+    async def _finish_opening(self):
+        await asyncio.sleep(15)
+
+        self._attr_is_opening = False
+        self._attr_is_closed = False  # now it's open
+
         self.async_write_ha_state()
