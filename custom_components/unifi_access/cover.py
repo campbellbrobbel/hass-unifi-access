@@ -122,10 +122,9 @@ class UnifiGarageDoorCoverEntity(UnifiAccessDoorEntity, CoverEntity):
         """Return if the cover is closing."""
         return self.door.is_locking
 
-    #
-    # def _handle_coordinator_update(self) -> None:
-    #     """Handle Unifi Access Garage Door Cover updates from coordinator."""
-    #     self._attr_is_closed = not self.door.is_open and self.door.is_locked
-    #     self._attr_is_opening = self.door.is_unlocking
-    #     self._attr_is_closing = self.door.is_locking
-    #     self.async_write_ha_state()
+    def _handle_coordinator_update(self) -> None:
+        """Handle Unifi Access Garage Door Cover updates from coordinator."""
+        self._attr_is_closed = not self.door.is_open and self.door.is_locked
+        self._attr_is_opening = self.door.is_unlocking
+        self._attr_is_closing = self.door.is_locking
+        self.async_write_ha_state()
