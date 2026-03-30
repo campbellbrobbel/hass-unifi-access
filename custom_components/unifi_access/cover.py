@@ -21,6 +21,9 @@ from .entity import UnifiAccessDoorEntity
 from .hub import DoorEntityType, DoorState
 
 _LOGGER = logging.getLogger(__name__)
+UPDATE_INTERVAL = 1  # seconds
+FULL_TRAVEL_TIME = 15  # seconds from 0 → 100
+STEP = 100 / (FULL_TRAVEL_TIME / UPDATE_INTERVAL)
 
 
 async def async_setup_entry(
@@ -63,6 +66,7 @@ class UnifiGarageDoorCoverEntity(UnifiAccessDoorEntity, CoverEntity):
     _attr_name = None
     _attr_is_opening = False
     _attr_is_closing = False
+    _attr_current_cover_position = 0
 
     @property
     def device_class(self) -> CoverDeviceClass:
@@ -109,7 +113,7 @@ class UnifiGarageDoorCoverEntity(UnifiAccessDoorEntity, CoverEntity):
         self.async_write_ha_state()
 
         await self._data.hub.client.unlock_door(self.door.id)
-        asyncio.create_task(self._finish_opening())
+        asyncio.create_task(self._run_motion(opening=True))
 
     async def async_close_cover(self, **kwargs) -> None:
         """Close the cover (trigger the door motor)."""
@@ -119,6 +123,7 @@ class UnifiGarageDoorCoverEntity(UnifiAccessDoorEntity, CoverEntity):
         self._attr_is_closing = True
         self.async_write_ha_state()
         await self._data.hub.client.unlock_door(self.door.id)
+        asyncio.create_task(self._run_motion(opening=False))
 
     @property
     def is_closed(self) -> bool | None:
@@ -153,6 +158,32 @@ class UnifiGarageDoorCoverEntity(UnifiAccessDoorEntity, CoverEntity):
         await asyncio.sleep(15)
 
         self._attr_is_opening = False
-        self._attr_is_closed = False  # now it's open
+        self._attr_is_closing = False
 
         self.async_write_ha_state()
+
+    async def _run_motion(self, opening: bool):
+        try:
+            while True:
+                await asyncio.sleep(UPDATE_INTERVAL)
+
+                pos = self._attr_current_cover_position or 0
+                if opening:
+                    self._attr_current_cover_position = min(100, int(pos + STEP))
+                else:
+                    self._attr_current_cover_position = max(0, int(pos - STEP))
+
+                # Stop conditions
+                if self._attr_current_cover_position in (0, 100):
+                    break
+
+                self.async_write_ha_state()
+
+            # Motion finished
+            self._attr_is_opening = False
+            self._attr_is_closing = False
+
+            self.async_write_ha_state()
+
+        except asyncio.CancelledError:
+            pass
